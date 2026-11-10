@@ -1,0 +1,71 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Host – Arunachala Quiz</title><link rel="stylesheet" href="app.css"></head><body>
+<header id="hd"></header><div id="nav"></div><main id="v"><div class="spin"></div></main><div id="toast"></div>
+<script type="module">
+import {A,F,auth,db,$,esc,beep,head,board,rank,toast} from './common.js';
+const {doc,getDoc,setDoc,deleteDoc,updateDoc,getDocs,collection,query,where,onSnapshot,serverTimestamp,increment}=F;
+head('Host Dashboard');
+const V=h=>$('#v').innerHTML=h;
+let user,unsub=[],S={},Q,quiz,qid,starts,AC;
+const stop=()=>{unsub.forEach(f=>f());unsub=[];clearInterval(S.iv);clearTimeout(S.t2);S={}};
+const nav=()=>$('#nav').innerHTML=user?`<button class="ghost" onclick="list()">My Quizzes</button><button class="ghost" onclick="edit()">+ New Quiz</button><button class="ghost" onclick="out()">Logout</button>`:'';
+window.out=()=>A.signOut(auth);
+A.onAuthStateChanged(auth,u=>{user=u&&!u.isAnonymous?u:null;nav();user?list():login()});
+function login(){V(`<section class="card hero"><h1>Host Login</h1><input id="em" type="email" placeholder="Email"><input id="pw" type="password" placeholder="Password"><button class="btn" id="li">Sign in</button></section>`);
+ $('#li').onclick=async()=>{try{await A.signInWithEmailAndPassword(auth,$('#em').value,$('#pw').value)}catch(e){toast('Login failed: '+e.code)}}}
+const newPin=async()=>{for(;;){const p=String(Math.floor(100000+Math.random()*900000));if((await getDocs(query(collection(db,'quizzes'),where('pin','==',p)))).empty)return p}};
+window.list=async()=>{stop();V('<div class="spin"></div>');
+ const s=await getDocs(query(collection(db,'quizzes'),where('owner','==',user.uid)));
+ const r=s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.updated?.seconds||0)-(a.updated?.seconds||0));
+ V(`<h1>My Quizzes</h1><div class="grid">${r.map(q=>`<div class="card"><span class="pill ${q.status}">${q.status}</span><h3>${esc(q.title)}</h3><p>${esc(q.subject)} · ${q.total} questions · PIN <b>${q.pin}</b></p><div class="row">${['draft','published'].includes(q.status)?`<button class="ghost" onclick="edit('${q.id}')">Edit</button>`:''}${['published','live'].includes(q.status)?`<button class="btn o" onclick="live('${q.id}')">${q.status==='live'?'Open live':'Start'}</button>`:''}<button class="ghost" onclick="res('${q.id}')">Results</button><button class="ghost" onclick="dup('${q.id}')">Reuse</button><button class="ghost" onclick="del('${q.id}')">Delete</button></div></div>`).join('')||'<p>No quizzes yet. Create your first one!</p>'}</div>`)};
+window.del=async id=>{if(!confirm('Delete this quiz permanently?'))return;for(const p of [['private','questions'],['live','current']])await deleteDoc(doc(db,'quizzes',id,...p)).catch(()=>{});await deleteDoc(doc(db,'quizzes',id));list()};
+window.dup=async id=>{const d=await getDoc(doc(db,'quizzes',id)),p=await getDoc(doc(db,'quizzes',id,'private','questions'));const ref=doc(collection(db,'quizzes'));
+ await setDoc(ref,{...d.data(),title:d.data().title+' (copy)',status:'draft',pin:await newPin(),owner:user.uid,updated:serverTimestamp()});await setDoc(doc(ref,'private','questions'),p.data());toast('Copied as a new draft');list()};
+// ---------- Quiz preparation ----------
+window.edit=async id=>{stop();window.ed={title:'',desc:'',subject:'',defTime:20,defMarks:10,neg:0,showResults:true,showCorrect:true,auto:true,qs:[]};
+ if(id){const d=await getDoc(doc(db,'quizzes',id)),p=await getDoc(doc(db,'quizzes',id,'private','questions'));window.ed={...d.data(),id,qs:p.exists()?p.data().list:[]}}paintEd()};
+window.mv=(i,d)=>{const j=i+d;if(j<0||j>=ed.qs.length)return;[ed.qs[i],ed.qs[j]]=[ed.qs[j],ed.qs[i]];paintEd()};
+window.paintEd=()=>V(`<h1>${ed.id?'Edit':'New'} Quiz</h1><div class="card"><input placeholder="Quiz title" value="${esc(ed.title)}" oninput="ed.title=this.value"><textarea placeholder="Description" oninput="ed.desc=this.value">${esc(ed.desc)}</textarea><div class="row"><label>Subject<input value="${esc(ed.subject)}" oninput="ed.subject=this.value"></label><label>Default timer (s)<input type="number" min="5" value="${ed.defTime}" oninput="ed.defTime=+this.value"></label><label>Marks / question<input type="number" min="1" value="${ed.defMarks}" oninput="ed.defMarks=+this.value"></label><label>Negative marks<input type="number" min="0" value="${ed.neg}" oninput="ed.neg=+this.value"></label></div><div class="row"><label><input type="checkbox" ${ed.showResults?'checked':''} onchange="ed.showResults=this.checked"> Show scores to students</label><label><input type="checkbox" ${ed.showCorrect?'checked':''} onchange="ed.showCorrect=this.checked"> Reveal correct answer after each question</label><label><input type="checkbox" ${ed.auto?'checked':''} onchange="ed.auto=this.checked"> Auto-advance</label></div></div>
+<h2>Questions (${ed.qs.length}) · total ${ed.qs.reduce((a,q)=>a+q.m,0)} marks</h2>${ed.qs.map((q,i)=>`<div class="card"><b>Q${i+1}</b><textarea placeholder="Question" oninput="ed.qs[${i}].t=this.value">${esc(q.t)}</textarea><input placeholder="Image URL (optional)" value="${esc(q.img)}" oninput="ed.qs[${i}].img=this.value">${q.o.map((o,k)=>`<label class="opline"><input type="radio" name="c${i}" ${q.c===k?'checked':''} onchange="ed.qs[${i}].c=${k}"><input placeholder="Option ${'ABCD'[k]} (tick the correct one)" value="${esc(o)}" oninput="ed.qs[${i}].o[${k}]=this.value"></label>`).join('')}<div class="row"><label>Marks<input type="number" value="${q.m}" oninput="ed.qs[${i}].m=+this.value"></label><label>Seconds<input type="number" value="${q.s}" oninput="ed.qs[${i}].s=+this.value"></label><button class="ghost" onclick="mv(${i},-1)">↑</button><button class="ghost" onclick="mv(${i},1)">↓</button><button class="ghost" onclick="ed.qs.splice(${i},1);paintEd()">Delete</button></div></div>`).join('')}
+<div class="row"><button class="btn o" onclick="ed.qs.push({t:'',img:'',o:['','','',''],c:0,m:ed.defMarks,s:ed.defTime});paintEd()">+ Add question</button><button class="ghost" onclick="prev()">Preview</button><button class="ghost" onclick="save('draft')">Save draft</button><button class="btn" onclick="save('published')">Publish</button></div>`);
+window.prev=()=>V(`<h1>Preview: ${esc(ed.title)}</h1>${ed.qs.map((q,i)=>`<div class="card"><h3>Q${i+1}. ${esc(q.t)} <small>(${q.m} marks · ${q.s}s)</small></h3>${q.img?`<img class="qi" src="${esc(q.img)}" alt="">`:''}${q.o.map((o,k)=>`<div class="opt ${k===q.c?'ok':''}"><b>${'ABCD'[k]}</b>${esc(o)}</div>`).join('')}</div>`).join('')}<button class="btn" onclick="paintEd()">Back to editor</button>`);
+window.save=async st=>{const e=ed;if(!e.title.trim())return toast('Enter a quiz title');
+ if(st==='published'&&(!e.qs.length||e.qs.some(q=>!q.t.trim()||q.o.some(o=>!o.trim()))))return toast('Add questions and fill every question and all four options');
+ try{const ref=e.id?doc(db,'quizzes',e.id):doc(collection(db,'quizzes')),pin=e.pin||await newPin();
+  await setDoc(ref,{title:e.title,desc:e.desc||'',subject:e.subject||'',defTime:e.defTime,defMarks:e.defMarks,neg:e.neg,showResults:e.showResults,showCorrect:e.showCorrect,auto:e.auto,total:e.qs.length,status:st,pin,owner:user.uid,updated:serverTimestamp()});
+  await setDoc(doc(ref,'private','questions'),{list:e.qs});toast(st==='published'?'Published! PIN '+pin:'Draft saved');list()}catch(x){toast('Save failed: '+x.code)}};
+// ---------- Live control ----------
+window.live=async id=>{stop();qid=id;quiz=(await getDoc(doc(db,'quizzes',id))).data();Q=(await getDoc(doc(db,'quizzes',id,'private','questions'))).data().list;
+ S={phase:'lobby',i:-1};starts={};AC={};let P=[];const done=new Set();
+ V(`<div class="card hero"><p>Students join with PIN</p><div class="pin">${quiz.pin}</div><p>${location.origin}</p><h2>${esc(quiz.title)}</h2></div><div id="ctl" class="row"></div><div class="card" id="mon"></div><h2>Players <span id="pc"></span></h2><div id="lb"></div>`);
+ const ctl=()=>{const p=S.phase;$('#ctl').innerHTML=(p==='lobby'?'<button class="btn o" onclick="go()">▶ Start quiz</button>':'')+(p==='question'?'<button class="btn" onclick="pz()">⏸ Pause</button>':'')+(p==='paused'?'<button class="btn" onclick="rs()">▶ Resume</button>':'')+(['question','reveal','paused'].includes(p)?'<button class="btn" onclick="nx()">⏭ Next</button><button class="ghost" onclick="en()">■ End</button>':'')+`<button class="ghost" onclick="tg()">${quiz.showResults?'Hide':'Reveal'} results to students</button><button class="ghost" onclick="res('${qid}')">Results page</button>`};
+ const mon=()=>{const q=Q[S.i];if(!$('#mon'))return;if(!q||['ended','lobby','countdown'].includes(S.phase))return $('#mon').innerHTML=`<b>Status: ${S.phase}</b>`;
+  const r=S.phase==='paused'?S.rem:Math.max(0,q.s-(Date.now()-S.start)/1000),c=AC[S.i]||[0,0,0,0];
+  $('#mon').innerHTML=`<b>Q${S.i+1}/${Q.length}</b> · ${Math.ceil(r)}s · ${S.phase}<h3>${esc(q.t)}</h3>${q.o.map((o,k)=>`<div class="mrow ${k===q.c?'ok':''}"><span>${'ABCD'[k]}. ${esc(o)}</span><b>${c[k]}</b></div>`).join('')}<p>Answered: ${c.reduce((a,b)=>a+b,0)}/${P.length}</p>`};
+ const pub=(phase,x={})=>{S={...S,phase,...x};const q=Q[S.i],o={phase,index:S.i,total:Q.length,startedAt:S.start||Date.now()};
+  if(q&&['question','paused','reveal'].includes(phase)){Object.assign(o,{text:q.t,img:q.img||'',options:q.o,dur:q.s,remaining:S.rem||0});if(phase==='reveal'&&quiz.showCorrect)o.correct=q.c}
+  ctl();mon();return setDoc(doc(db,'quizzes',qid,'live','current'),o)};
+ const openQ=()=>{clearTimeout(S.t2);starts[S.i]=Date.now();pub('question',{start:starts[S.i]})};
+ const endQ=()=>{pub('reveal');if(quiz.auto)S.t2=setTimeout(nx,4000)};
+ const fin=async()=>{clearTimeout(S.t2);await pub('ended');await updateDoc(doc(db,'quizzes',qid),{status:'ended'})};
+ window.go=async()=>{await updateDoc(doc(db,'quizzes',qid),{status:'live'});S.i=0;pub('countdown',{start:Date.now()});S.t2=setTimeout(openQ,3000);beep()};
+ window.nx=()=>{clearTimeout(S.t2);if(S.i+1>=Q.length)return fin();S.i++;openQ()};
+ window.pz=()=>{S.rem=Math.max(0,Q[S.i].s-(Date.now()-S.start)/1000);pub('paused')};
+ window.rs=()=>{S.start=Date.now()-(Q[S.i].s-S.rem)*1000;starts[S.i]=S.start;pub('question')};
+ window.en=()=>confirm('End the quiz for everyone?')&&fin();
+ window.tg=async()=>{quiz.showResults=!quiz.showResults;await updateDoc(doc(db,'quizzes',qid),{showResults:quiz.showResults});ctl()};
+ S.iv=setInterval(()=>{mon();if(S.phase==='question'&&Date.now()-S.start>=Q[S.i].s*1000)endQ()},500);
+ unsub.push(onSnapshot(collection(db,'quizzes',qid,'players'),s=>{P=s.docs.map(d=>({id:d.id,...d.data()}));$('#pc').textContent=`(${P.length})`;$('#lb').innerHTML=board(P)}));
+ // Host browser scores answers (answers are create-only for students, correct answers never leave the host)
+ unsub.push(onSnapshot(collection(db,'quizzes',qid,'answers'),s=>s.docChanges().forEach(async c=>{
+  if(c.type!=='added')return;const a=c.doc.data(),q=Q[a.q];if(!q)return;
+  (AC[a.q]=AC[a.q]||[0,0,0,0])[a.choice]++;
+  if(a.scored||done.has(c.doc.id))return;done.add(c.doc.id);
+  const t=Math.max(0,((a.at?.toMillis?.()||Date.now())-(starts[a.q]||Date.now()))/1000),ok=t<=q.s+2&&a.choice===q.c;
+  try{await updateDoc(doc(db,'quizzes',qid,'players',a.uid),{score:increment(ok?q.m:-quiz.neg),correct:increment(ok?1:0),wrong:increment(ok?0:1),time:increment(Math.min(t,q.s))});await updateDoc(c.doc.ref,{scored:true})}catch(e){console.error(e)}})));
+ ctl();mon()};
+// ---------- Results ----------
+window.res=async id=>{stop();const d=await getDoc(doc(db,'quizzes',id)),s=await getDocs(collection(db,'quizzes',id,'players'));window.RP=s.docs.map(x=>x.data());window.RT=d.data().title;
+ V(`<div class="noprint"><h1>${esc(RT)} – Results</h1><div class="row"><button class="btn" onclick="csv()">Export CSV</button><button class="btn o" onclick="print()">Print</button><button class="ghost" onclick="list()">Back</button></div></div><h1 style="display:none" class="pt">${esc(RT)}</h1>${board(RP)}`)};
+window.csv=()=>{const q=v=>'"'+String(v).replace(/"/g,'""')+'"',r=['Rank,Name,Class,Score,Correct,Wrong,Time(s)',...rank(RP).map((p,i)=>[i+1,q(p.name),q(p.cls),p.score,p.correct,p.wrong,p.time.toFixed(1)].join(','))];
+ const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([r.join('\n')],{type:'text/csv'}));a.download=RT+'-results.csv';a.click()};
+</script></body></html>

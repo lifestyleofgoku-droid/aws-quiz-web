@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Arunachala Quiz</title><link rel="stylesheet" href="app.css"></head><body>
+<header id="hd"></header><main id="v"></main><div id="toast"></div>
+<script type="module">
+import {A,F,auth,db,$,esc,beep,head,board,toast} from './common.js';
+const {doc,getDoc,setDoc,getDocs,collection,query,where,onSnapshot,serverTimestamp}=F;
+head('Student Quiz');
+const V=h=>$('#v').innerHTML=h;
+let qid,quiz={},live=null,players=[],uid,tick,me,ans={};
+const rem=()=>live.phase==='paused'?live.remaining:Math.max(0,live.dur-(Date.now()-live.startedAt)/1000);
+try{await A.signInAnonymously(auth);uid=auth.currentUser.uid}catch(e){toast('Sign-in failed: '+e.code)}
+function form(){V(`<section class="card hero"><h1>Welcome, Champion!</h1><p>Enter your details and the PIN shown by your teacher.</p><input id="nm" placeholder="Your name" maxlength="40"><div class="row"><input id="cl" placeholder="Class (e.g. 8)" maxlength="10"><input id="sc" placeholder="Section" maxlength="5"></div><input id="pin" placeholder="Quiz PIN" inputmode="numeric" maxlength="6"><button class="btn" id="go">Join Quiz</button></section>`);$('#go').onclick=join}
+async function join(){
+ const name=$('#nm').value.trim(),cls=($('#cl').value.trim()+' '+$('#sc').value.trim()).trim(),pin=$('#pin').value.trim();
+ if(!name||!$('#cl').value.trim()||!pin)return toast('Please fill in name, class and PIN');
+ $('#go').disabled=true;
+ try{
+  const s=await getDocs(query(collection(db,'quizzes'),where('pin','==',pin)));
+  if(s.empty||!['published','live'].includes(s.docs[0].data().status)){$('#go').disabled=false;return toast('Invalid or closed PIN')}
+  qid=s.docs[0].id;const pr=doc(db,'quizzes',qid,'players',uid);let p=await getDoc(pr);
+  if(!p.exists())await setDoc(pr,{name,cls,score:0,correct:0,wrong:0,time:0,joinedAt:serverTimestamp()});
+  me={name:p.exists()?p.data().name:name};
+  onSnapshot(doc(db,'quizzes',qid),d=>{quiz=d.data()||{};render()});
+  onSnapshot(doc(db,'quizzes',qid,'live','current'),d=>{live=d.data()||null;render()});
+  onSnapshot(collection(db,'quizzes',qid,'players'),s=>{players=s.docs.map(d=>({id:d.id,...d.data()}));if(live?.phase==='ended')render()});
+ }catch(e){$('#go').disabled=false;toast('Could not join: '+e.code)}
+}
+function render(){
+ clearInterval(tick);const p=live?.phase;
+ if(!p||p==='lobby')return V(`<section class="card hero"><div class="spin"></div><h2>You're in, ${esc(me.name)}!</h2><p>Waiting for the host to start <b>${esc(quiz.title)}</b>…</p></section>`);
+ if(p==='countdown'){const f=()=>{V(`<section class="card hero"><h1>Get ready!</h1><div class="big">${Math.max(Math.ceil(3-(Date.now()-live.startedAt)/1000),1)}</div></section>`);beep(500)};f();tick=setInterval(f,1000);return}
+ if(p==='ended'){const m=players.find(x=>x.id===uid);return V(`<section class="card hero"><h1>Quiz Complete 🎉</h1>${quiz.showResults&&m?`<div class="big">${m.score}</div><p>${m.correct} correct · ${m.wrong} wrong</p>`:'<p>Thank you for taking part! Your teacher will share the results.</p>'}</section>${quiz.showResults?board(players):''}`)}
+ const i=live.index,a=ans[i];
+ V(`<section class="card"><div class="top"><span>Question ${i+1} of ${live.total}</span><b id="t"></b></div><div class="bar"><i id="b"></i></div>${live.img?`<img class="qi" src="${esc(live.img)}" alt="">`:''}<h2>${esc(live.text)}</h2><div class="opts">${live.options.map((o,k)=>`<button class="opt ${a===k?'sel':''} ${p==='reveal'&&live.correct===k?'ok':''}" data-k="${k}" ${a!=null||p!=='question'?'disabled':''}><b>${'ABCD'[k]}</b>${esc(o)}</button>`).join('')}</div><p class="note">${p==='paused'?'⏸ Paused by host':a!=null?'✔ Answer locked in':p==='reveal'?"Time's up!":'Choose one answer'}</p></section>`);
+ document.querySelectorAll('.opt').forEach(b=>b.onclick=()=>submit(i,+b.dataset.k));
+ const t=()=>{const r=rem();$('#t').textContent=Math.ceil(r)+'s';$('#b').style.width=(r/live.dur*100)+'%';if(r<=0&&p==='question')document.querySelectorAll('.opt').forEach(b=>b.disabled=true)};t();tick=setInterval(t,250);
+}
+async function submit(i,k){
+ if(ans[i]!=null||rem()<=0)return;ans[i]=k;render();
+ try{await setDoc(doc(db,'quizzes',qid,'answers',uid+'_'+i),{uid,q:i,choice:k,at:serverTimestamp()});beep(700)}catch(e){toast('Answer not saved ('+e.code+')')}
+}
+form();
+</script></body></html>

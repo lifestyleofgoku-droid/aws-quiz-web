@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{d}/documents {
+    function signed() { return request.auth != null; }
+    function host() { return signed() && request.auth.token.firebase.sign_in_provider == 'password'; }
+    function owner(q) { return host() && get(/databases/$(d)/documents/quizzes/$(q)).data.owner == request.auth.uid; }
+    match /quizzes/{q} {
+      allow read: if signed();
+      allow create: if host() && request.resource.data.owner == request.auth.uid;
+      allow update, delete: if host() && resource.data.owner == request.auth.uid;
+      match /private/{x} { allow read, write: if owner(q); }          // correct answers: host only
+      match /live/{x} { allow read: if signed(); allow write: if owner(q); }
+      match /players/{u} {
+        allow read: if signed();
+        allow create: if request.auth.uid == u && request.resource.data.score == 0 && request.resource.data.correct == 0
+          && request.resource.data.wrong == 0 && request.resource.data.time == 0 && request.resource.data.name.size() <= 40;
+        allow update, delete: if owner(q);
+      }
+      match /answers/{a} {
+        allow read: if owner(q) || (signed() && resource.data.uid == request.auth.uid);
+        allow create: if signed() && request.resource.data.uid == request.auth.uid
+          && a == request.auth.uid + '_' + string(request.resource.data.q)
+          && request.resource.data.choice in [0,1,2,3];                 // create-only = no duplicates / changes
+        allow update, delete: if owner(q);
+      }
+    }
+  }
+}
